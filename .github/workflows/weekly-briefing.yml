@@ -30,6 +30,5 @@ jobs:
           WP_USERNAME:       ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD:   ${{ secrets.WP_APP_PASSWORD }}
           PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
-          BRIEFING_MODEL:    ${{ secrets.BRIEFING_MODEL }}
-          UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
+          # Optional: set BRIEFING_MODEL secret to use Claude instead of gpt-4.1
         run: python3 generate_weekly_briefing.py --post --fresh

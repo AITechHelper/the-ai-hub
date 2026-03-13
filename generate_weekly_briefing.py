@@ -54,7 +54,7 @@ CACHE_FILE = Path("rss_cache.json")
 CACHE_MAX_AGE_HOURS = 2
 
 # Set BRIEFING_MODEL=claude-opus-4-6 in .env to use Claude instead
-MODEL = os.getenv("BRIEFING_MODEL", "gpt-4.1")
+MODEL = os.getenv("BRIEFING_MODEL") or "gpt-4.1"
 
 RSS_FEEDS = [
     # Company / lab blogs (highest signal)
