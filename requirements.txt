@@ -1,0 +1,8 @@
+feedparser
+requests
+python-dotenv
+python-dateutil
+trafilatura
+markdown
+openai
+anthropic

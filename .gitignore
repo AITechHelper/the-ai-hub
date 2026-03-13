@@ -1,0 +1,27 @@
+# Secrets — never commit these
+.env
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Cache & output files
+rss_cache.json
+ai_weekly_briefing_*.md
+ai_weekly_briefing.txt
+*.bak-*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# Claude local files
+.claude/
