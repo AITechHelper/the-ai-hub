@@ -762,9 +762,9 @@ def upload_featured_image(image_bytes: bytes, filename: str, site_url: str, toke
         )
         if resp.status_code in (200, 201):
             return resp.json().get("id")
-        print(f"  [warn] Image upload failed ({resp.status_code})")
+        print(f"  [warn] Image upload failed ({resp.status_code}): {resp.text[:300]}", flush=True)
     except Exception as e:
-        print(f"  [warn] Image upload error: {e}")
+        print(f"  [warn] Image upload error: {e}", flush=True)
     return None
 
 
@@ -814,7 +814,8 @@ def post_to_wordpress(title: str, html: str) -> str:
     )
 
     if resp.status_code not in (200, 201):
-        raise SystemExit(f"WordPress post failed ({resp.status_code}):\n{resp.text[:400]}")
+        print(f"  [error] WordPress post failed ({resp.status_code}): {resp.text[:400]}", flush=True)
+        raise SystemExit(1)
 
     return resp.json().get("link", f"{site_url}/wp-json/wp/v2/posts")
 
