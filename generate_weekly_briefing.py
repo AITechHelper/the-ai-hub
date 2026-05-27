@@ -59,9 +59,9 @@ MODEL = os.getenv("BRIEFING_MODEL") or "gpt-4.1"
 RSS_FEEDS = [
     # Company / lab blogs (highest signal)
     "https://openai.com/news/rss.xml",
-    "https://blog.google/technology/ai/rss/",   # covers Google AI + DeepMind
+    "https://blog.google/technology/ai/rss/",    # covers Google AI + DeepMind
     "https://huggingface.co/blog/feed.xml",
-    "https://engineering.fb.com/feed/",          # Meta / FAIR engineering
+    "https://engineering.fb.com/feed/",           # Meta / FAIR engineering
 
     # AI-focused coverage
     "https://venturebeat.com/feed/",
@@ -79,6 +79,7 @@ RSS_FEEDS = [
 
 SOURCE_WEIGHTS = {
     "openai.com": 5,
+    "anthropic.com": 5,
     "blog.google": 4,
     "huggingface.co": 4,
     "engineering.fb.com": 3,
@@ -152,7 +153,15 @@ def score_item(item: dict) -> float:
     age_hours = (datetime.now(timezone.utc) - item["published_at"]).total_seconds() / 3600.0
     recency = max(0.0, 72.0 - age_hours) / 72.0   # boost last 3 days
     hn_boost = min(item.get("hn_points", 0) / 100.0, 3.0)  # cap HN boost at 3
-    return weight + recency + hn_boost
+    # Boost stories about new tools or product launches readers can actually use
+    tool_signals = {
+        "launch", "launches", "release", "releases", "released", "now available",
+        "new feature", "new model", "new tool", "new app", "open source", "open-source",
+        "update", "upgrade", "announces", "announced", "just dropped",
+    }
+    title_lower = item.get("title", "").lower()
+    tool_boost = 0.5 if any(s in title_lower for s in tool_signals) else 0.0
+    return weight + recency + hn_boost + tool_boost
 
 def stable_id(title: str, url: str) -> str:
     return hashlib.sha256((title + "||" + url).encode()).hexdigest()[:16]
@@ -358,57 +367,152 @@ def week_range_str() -> str:
 
 def build_prompt(selected: list[dict]) -> str:
     date_range = week_range_str()
+    month_year = f"{date_range.split('–')[0].rsplit(' ', 1)[0].split()[-1]} {date_range.split(', ')[-1]}"
+
+    # Split items: top stories = direct company/lab sources OR stories
+    # that prominently name a major AI player in the title
+    top_sources = {
+        "openai.com", "anthropic.com", "blog.google", "huggingface.co",
+        "engineering.fb.com", "deepmind.google",
+    }
+    # These keywords in the TITLE are enough to make any story a top story
+    top_title_keywords = [
+        # Major AI labs / models
+        "anthropic", "claude", "openai", "chatgpt", "gpt-", "gemini",
+        "meta ai", "llama", "deepmind", "mistral", "copilot",
+        # Popular AI tools readers actually use
+        "perplexity", "midjourney", "sora", "dall-e", "dalle", "cursor",
+        "github copilot", "notion ai", "grammarly", "runway", "elevenlabs",
+        "adobe firefly", "canva ai", "stable diffusion", "flux",
+        "google ai", "microsoft ai", "apple intelligence",
+        # Product launch / release language — any source
+        "launches", "releases", "announces", "now available", "just launched",
+        "new feature", "new model", "major update",
+    ]
+
+    # Phrases that signal "a new AI tool or feature you can use" — get a score boost
+    tool_launch_phrases = [
+        "launch", "release", "available", "update", "feature", "new tool",
+        "new app", "new ai", "free", "pro plan", "api access", "open source",
+        "open-source", "just dropped",
+    ]
+
+    def is_top_story(it: dict) -> bool:
+        if it["source"] in top_sources:
+            return True
+        if it.get("hn_points", 0) >= 100:
+            return True
+        title_lower = it["title"].lower()
+        if any(k in title_lower for k in top_title_keywords):
+            return True
+        # Stories about new tools/launches that readers can act on
+        if any(p in title_lower for p in tool_launch_phrases):
+            return True
+        return False
+
+    # Cap top stories at 12 — score-sorted, most important first
+    top_candidates = [it for it in selected if is_top_story(it)]
+    top = sorted(top_candidates, key=score_item, reverse=True)[:12]
+    top_ids = {it["id"] for it in top}
+    rest = [it for it in selected if it["id"] not in top_ids]
+
     lines = [
-        "You are writing the weekly blog post for aitechhelper.com.",
-        "The site helps non-technical people stay up to date on AI — specifically what tools and features are AVAILABLE RIGHT NOW.",
+        f"You are writing the weekly AI briefing for aitechhelper.com — week of {date_range}.",
         "",
-        "PRIMARY FOCUS: new AI tools, new features, new capabilities — what users can actually do today.",
-        "Secondary: organize the most useful items by audience (Business / Creators / Entrepreneurs).",
+        "AUDIENCE: Curious, intelligent readers who follow AI but are NOT developers or researchers.",
+        "They know ChatGPT exists. They may not know what a 'system card', 'TPU', or 'inference endpoint' is.",
         "",
-        "HARD RULES:",
-        "- Avoid general news unless it directly changes what users can do with AI tools this week.",
-        "- Every bullet must name a specific tool/feature, describe what it does, and give a concrete use case.",
-        "- Use ONLY the provided source items. Do NOT invent features, pricing, benchmarks, dates, or partnerships.",
-        "- No rumors, leaks, or unconfirmed claims.",
-        "- Every bullet MUST include a markdown link: [Source](url) — must be one of the provided URLs.",
-        "- Output in clean Markdown. Use ## for section headers, **bold** for tool/feature names.",
-        "- Prefer product/feature releases over opinion pieces or general commentary.",
-        "- Where full_text is available for an item, use it to write more accurate, specific bullets.",
-        "- Items with high HN points are community-validated as important — prioritize them.",
+        "TONE: Knowledgeable, direct, and engaging. Write like a sharp tech journalist who also uses these tools daily.",
+        "You can have opinions. You can challenge the reader. You can react to what's happening.",
+        "Do NOT be promotional. Do NOT use marketing language. Be honest and specific.",
         "",
-        f"# AI Tools & Capabilities Weekly — Week of {date_range}",
-        "(The line above is the post title — use a single # for it, then ## for all section headers below.)",
+        "STORY PRIORITY — this is critical:",
+        "- PRIORITIZE stories about new AI tools, apps, features, or models that readers can actually try or use.",
+        "- PRIORITIZE stories about product launches, major updates, pricing changes, or availability milestones.",
+        "- PRIORITIZE stories about new technology that changes what AI can do for everyday people.",
+        "- DEPRIORITIZE pure business/corporate stories (funding rounds, org charts, executive moves, lawsuits)",
+        "  UNLESS they directly affect a product readers use or signal a major shift in the AI landscape.",
+        "- When in doubt: ask 'can a reader do something differently because of this story?' — if yes, it ranks higher.",
         "",
-        "Write a 2-sentence intro paragraph summarizing the biggest theme or story of the week before the first section.",
+        "HEADLINE RULES — this is critical:",
+        "- Write headlines a smart non-technical reader would immediately understand.",
+        "- Never use jargon or product names as the entire headline.",
+        "- BAD: 'GPT-5.5 System Card Released'",
+        "- GOOD: 'OpenAI Publishes Behind-the-Scenes Safety Report on Its Newest AI Model'",
+        "- BAD: 'WebSockets Added to Responses API'",
+        "- GOOD: 'OpenAI Makes Its AI Tools Dramatically Faster for Businesses That Build With Them'",
+        "- The headline should tell you WHAT happened and give enough context to care.",
         "",
-        "## WHAT'S NEW — 12 items",
-        "- **Tool/Feature**: what it does (1 sentence). Best for: [who benefits]. [Source](url)",
-        "",
-        "## AI FOR BUSINESS — 8 items",
-        "- **Tool/Feature**: capability + business use case (1 sentence). [Source](url)",
-        "",
-        "## AI FOR CREATORS — 8 items",
-        "- **Tool/Feature**: capability + creator use case (1 sentence). [Source](url)",
-        "",
-        "## AI FOR ENTREPRENEURS — 8 items",
-        "- **Tool/Feature**: capability + entrepreneur use case (1 sentence). [Source](url)",
-        "",
-        "## HOW TO USE THIS WEEK — 5 bullets",
-        "- **Action**: specific thing to try in under 10 minutes (1 sentence).",
-        "",
-        "## QUICK HITS — 8 items",
-        "- One sharp sentence. [Source](url)",
-        "",
-        "## SOURCES",
-        "- Deduplicated list of every source used, as markdown links.",
+        "OUTPUT FORMAT — follow this structure exactly, in this order:",
         "",
         "---",
-        "SOURCE ITEMS (title | text | url | hn_points if notable):",
+        "",
+        f"# AI Tech Helper Weekly: [Punchy subtitle naming the single biggest story of the week in plain English. No jargon. Max 10 words. Example: 'OpenAI Drops GPT-5.5, Redefines Agents and Automation']",
+        "",
+        "[INTRO — 2 to 3 sentences. Set the scene for the week. What was the dominant theme or tension? ",
+        "Make it feel like an opening to a good article, not a table of contents.]",
+        "",
+        "## TOP STORIES",
+        "",
+        "Write the FIRST 6 items from the TOP STORY ITEMS list as headlines + bullets.",
+        "",
+        "Use this format for each story:",
+        "",
+        "### [Readable, context-friendly headline — see HEADLINE RULES above]",
+        "- [Bullet: key fact — what specifically happened, in plain English]",
+        "- [Bullet: context — who it affects, what changed, timeline, pricing, or how it compares to before]",
+        "- [Bullet: one more relevant detail — availability, caveats, or what to watch for]",
+        "- [Source](url)",
+        "",
+        "Rules for bullets:",
+        "- Be specific. Include numbers, dates, prices where available.",
+        "- If it's a new AI model: what it can do, how it compares, when available, what it costs.",
+        "- If it's a pricing or plan change: what changed, who is affected, when it takes effect.",
+        "- If it's a business story: what happened, who is involved, what it signals.",
+        "- 3–4 bullets per story. No filler. Save opinions for the article.",
+        "",
+        "---",
+        "",
+        "## THIS WEEK IN AI",
+        "",
+        "Write a 4–6 paragraph article reacting to the week's top stories as a whole.",
+        "This is NOT a summary. The reader already read the headlines above.",
+        "Instead: connect the dots, find the bigger pattern, challenge assumptions, ask hard questions.",
+        "Give readers something to think about or try. Make it worth reading.",
+        "Write in first-person plural ('we', 'us') or direct second person ('you').",
+        "End with a specific call to action or a question that makes the reader think.",
+        "",
+        "---",
+        "",
+        "## MORE TOP STORIES",
+        "",
+        "Write the REMAINING 6 items from the TOP STORY ITEMS list using the same headline + bullets format.",
+        "",
+        "---",
+        "",
+        "## ALSO THIS WEEK",
+        "",
+        "List every item from the REST ITEMS list below. One line each:",
+        "- [Plain-English title or description] — [one sentence summary] ([Source](url))",
+        "",
+        "Include every item. Do not skip any.",
+        "",
+        "---",
+        "",
+        "TOP STORY ITEMS (first 6 go above the article, remaining 6 go below it):",
     ]
-    for it in selected:
+
+    for it in top:
         text = it.get("full_text") or it["summary"]
         hn = f" | HN: {it['hn_points']} pts" if it.get("hn_points", 0) > 0 else ""
-        lines.append(f"- {it['title']} | {text} | {it['url']}{hn}")
+        lines.append(f"- {it['title']} | {text[:400]} | {it['url']}{hn}")
+
+    lines.append("")
+    lines.append("REST ITEMS (list these in the ALSO THIS WEEK section):")
+
+    for it in rest:
+        text = it.get("full_text") or it["summary"]
+        lines.append(f"- {it['title']} | {text[:200]} | {it['url']}")
 
     return "\n".join(lines)
 
@@ -436,219 +540,50 @@ def output_filename() -> str:
 # WORDPRESS
 # =========================
 
-# Section config: (accent_color, icon, anchor_id)
-SECTION_STYLES = {
-    "WHAT'S NEW":           ("#8EF2FE", "🔥", "whats-new"),
-    "AI FOR BUSINESS":      ("#a78bfa", "💼", "business"),
-    "AI FOR CREATORS":      ("#f472b6", "🎨", "creators"),
-    "AI FOR ENTREPRENEURS": ("#fbbf24", "🚀", "entrepreneurs"),
-    "HOW TO USE":           ("#34d399", "⚡", "how-to"),
-    "QUICK HITS":           ("#8EF2FE", "📌", "quick-hits"),
-    "SOURCES":              ("#64748b", "🔗", "sources"),
-}
-
-
 def markdown_to_html(md: str) -> tuple[str, str]:
-    """Convert markdown briefing to styled HTML. Returns (title, body_html)."""
+    """Convert markdown briefing to clean HTML. Returns (title, body_html)."""
     import markdown as md_lib
     import re as _re
 
-    # ── Extract title line ──────────────────────────────────────────────────
     lines = md.strip().splitlines()
     title = ""
     body_lines = []
     for line in lines:
-        # Accept # or ## for the title line (LLM sometimes uses either)
-        if not title and (line.startswith("# ") or line.startswith("## ")) and "AI Tools" in line:
+        if not title and line.startswith("# "):
             title = line.lstrip("#").strip()
         else:
             body_lines.append(line)
 
     body_md = "\n".join(body_lines)
+
+    # Convert markdown to HTML — tables, fenced code, footnotes etc.
     raw_html = md_lib.markdown(body_md, extensions=["extra"])
 
-    # ── 1. Style <p> tags ───────────────────────────────────────────────────
-    raw_html = raw_html.replace(
-        "<p>", '<p style="margin-bottom:16px; line-height:1.7;">'
-    )
-
-    # ── 2. Section headers: large dividers with section anchors ────────────
-    def style_h2(match):
-        text = match.group(1)
-        color, icon, anchor = "#8EF2FE", "", _re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-        section_key = "OTHER"
-        for key, (c, i, a) in SECTION_STYLES.items():
-            if key in text.upper():
-                color, icon, anchor = c, i + " ", a
-                section_key = key
-                break
-        clean_text = _re.sub(r"<[^>]+>", "", text).strip()
-        return (
-            f'<h2 id="{anchor}" data-section="{section_key}" style="margin:0; padding:0;">'
-            f'<span style="font-size:0.78em; font-weight:800; text-transform:uppercase; '
-            f'letter-spacing:0.16em; color:{color};">{icon}{clean_text}</span>'
-            f'</h2>'
-        )
-
-    raw_html = _re.sub(r"<h2>(.*?)</h2>", style_h2, raw_html)
-
-    # ── 3. Split into intro + sections; apply per-section list styling ───────
-    h2_pat = _re.compile(
-        r'(<h2 id="[^"]*" data-section="([^"]*)"[^>]*>.*?</h2>)', _re.DOTALL
-    )
-    parts = h2_pat.split(raw_html)
-    # parts layout: [intro, full_h2, key, content, full_h2, key, content, ...]
-
-    def style_section_lists(content: str, key: str) -> str:
-        """Apply section-specific list item styles."""
-        if "HOW TO USE" in key:
-            # Numbered step circles
-            counter = [0]
-            def step_li(m):
-                counter[0] += 1
-                inner = m.group(1)
-                return (
-                    f'<li style="list-style:none; display:flex; align-items:flex-start; '
-                    f'gap:18px; padding:20px 0; margin-bottom:0; '
-                    f'border-bottom:1px solid rgba(142,242,254,0.08);">'
-                    f'<span style="flex-shrink:0; width:38px; height:38px; min-width:38px; '
-                    f'border-radius:50%; background:rgba(52,211,153,0.12); '
-                    f'border:2px solid #34d399; color:#34d399; font-weight:800; '
-                    f'font-size:0.85em; display:inline-flex; align-items:center; '
-                    f'justify-content:center;">{counter[0]}</span>'
-                    f'<div style="line-height:1.7; padding-top:8px; flex:1;">{inner}</div>'
-                    f'</li>'
-                )
-            content = _re.sub(r"<li>(.*?)</li>", step_li, content, flags=_re.DOTALL)
-            content = content.replace("<ul>", '<ul style="list-style:none; padding:0; margin:0;">')
-            content = content.replace("<ol>", '<ol style="list-style:none; padding:0; margin:0;">')
-
-        elif "QUICK HITS" in key:
-            # Flash bullets with › icon
-            def flash_li(m):
-                inner = m.group(1)
-                return (
-                    f'<li style="list-style:none; display:flex; align-items:flex-start; '
-                    f'gap:10px; padding:12px 0; margin-bottom:0; line-height:1.7; '
-                    f'border-bottom:1px solid rgba(128,128,128,0.1);">'
-                    f'<span style="color:#8EF2FE; flex-shrink:0; font-size:1.3em; '
-                    f'line-height:1.3; margin-top:1px;">›</span>'
-                    f'<span style="flex:1;">{inner}</span>'
-                    f'</li>'
-                )
-            content = _re.sub(r"<li>(.*?)</li>", flash_li, content, flags=_re.DOTALL)
-            content = content.replace("<ul>", '<ul style="list-style:none; padding:0; margin:0;">')
-
-        elif "SOURCES" in key:
-            content = content.replace(
-                "<li>",
-                '<li style="list-style:none; padding:5px 0; line-height:1.7; '
-                'opacity:0.55; font-size:0.85em;">',
-            )
-            content = content.replace("<ul>", '<ul style="list-style:none; padding:0; margin:0;">')
-
-        else:
-            # Card blocks: What's New, Business, Creators, Entrepreneurs
-            content = content.replace(
-                "<li>",
-                '<li style="list-style:none; padding:20px 24px; margin-bottom:16px; '
-                'border-radius:10px; border:1px solid rgba(142,242,254,0.13); '
-                'border-left:4px solid rgba(142,242,254,0.45); '
-                'line-height:1.7; background:rgba(142,242,254,0.03);">',
-            )
-            content = content.replace("<ul>", '<ul style="list-style:none; padding:0; margin:0;">')
-
-        return content
-
-    # Intro → "This Week in AI" highlight card
-    intro_html = parts[0] if parts else ""
-    intro_block = (
-        f'<div style="background:rgba(142,242,254,0.05); '
-        f'border:1px solid rgba(142,242,254,0.22); border-left:4px solid #8EF2FE; '
-        f'border-radius:10px; padding:22px 28px 16px; margin-bottom:44px;">'
-        f'<div style="font-size:0.68em; font-weight:800; text-transform:uppercase; '
-        f'letter-spacing:0.15em; color:#8EF2FE; margin-bottom:14px;">⚡ This Week in AI</div>'
-        f'{intro_html}'
-        f'</div>'
-    )
-
-    # Build each section block with top divider
-    section_blocks = []
-    i = 1
-    while i + 1 < len(parts):
-        h2_html  = parts[i]
-        sec_key  = parts[i + 1]
-        content  = parts[i + 2] if i + 2 < len(parts) else ""
-        i += 3
-        styled = style_section_lists(content, sec_key)
-        section_blocks.append(
-            f'<div style="margin-top:72px;">'
-            f'<div style="border-top:1px solid rgba(142,242,254,0.1); '
-            f'padding-top:32px; margin-bottom:28px;">'
-            f'{h2_html}'
-            f'</div>'
-            f'{styled}'
-            f'</div>'
-        )
-
-    raw_html = intro_block + "\n".join(section_blocks)
-
-    # ── 4. Source badges ────────────────────────────────────────────────────
+    # Open all links in a new tab
     raw_html = _re.sub(
-        r'<a href="([^"]+)">Source</a>',
-        r'<a href="\1" target="_blank" rel="noopener" '
-        r'style="font-size:0.7em; text-decoration:none; color:#8EF2FE; opacity:0.75; '
-        r'border:1px solid rgba(142,242,254,0.3); border-radius:4px; '
-        r'padding:2px 8px; margin-left:8px; white-space:nowrap; vertical-align:middle;">↗ source</a>',
+        r'<a href="([^"]+)">',
+        r'<a href="\1" target="_blank" rel="noopener">',
         raw_html,
     )
 
-    # ── 5. Jump-to-section nav ──────────────────────────────────────────────
-    nav_links = [
-        ("#whats-new",     "🔥 Releases"),
-        ("#business",      "💼 Business"),
-        ("#creators",      "🎨 Creators"),
-        ("#entrepreneurs", "🚀 Entrepreneurs"),
-        ("#how-to",        "⚡ Try This Week"),
-        ("#quick-hits",    "📌 Quick Hits"),
-    ]
-    nav_items = "".join(
-        f'<a href="{href}" style="color:#8EF2FE; text-decoration:none; '
-        f'font-size:0.76em; font-weight:600; white-space:nowrap; '
-        f'border:1px solid rgba(142,242,254,0.28); border-radius:20px; '
-        f'padding:6px 14px; opacity:0.8;">{label}</a>'
-        for href, label in nav_links
-    )
-    jump_nav = (
-        f'<div style="margin-bottom:44px; padding:16px 20px; '
-        f'background:rgba(0,3,56,0.4); border-radius:10px; '
-        f'border:1px solid rgba(142,242,254,0.1);">'
-        f'<div style="font-size:0.68em; font-weight:700; text-transform:uppercase; '
-        f'letter-spacing:0.12em; opacity:0.4; margin-bottom:12px;">Jump to:</div>'
-        f'<div style="display:flex; flex-wrap:wrap; gap:8px;">{nav_items}</div>'
-        f'</div>'
+    # Bold the story headlines (h3) and add breathing room after them
+    raw_html = _re.sub(
+        r'<h3>(.*?)</h3>',
+        r'<h3><b>\1</b></h3>',
+        raw_html,
+        flags=_re.DOTALL,
     )
 
-    # ── 6. Final wrapper ────────────────────────────────────────────────────
-    week_of = title.split("Week of")[-1].strip() if "Week of" in title else ""
+    # Space out after each bullet list (end of each story block)
+    raw_html = raw_html.replace('</ul>', '</ul><br>')
 
-    html = f"""<div style="max-width:760px; margin:0 auto; font-family:inherit; line-height:1.7;">
+    # Space out after section headings
+    raw_html = raw_html.replace('</h2>', '</h2><br>')
 
-  <!-- Dateline bar -->
-  <div style="text-align:center; padding:28px 0 36px; border-bottom:1px solid rgba(142,242,254,0.15); margin-bottom:36px;">
-    <div style="font-size:0.68em; font-weight:700; text-transform:uppercase; letter-spacing:0.18em; opacity:0.4; margin-bottom:8px;">Week of {week_of}</div>
-    <div style="opacity:0.35; font-size:0.8em;">📡 Curated from 13 sources &nbsp;·&nbsp; Ranked by community signal</div>
-  </div>
+    # Space out between article paragraphs
+    raw_html = raw_html.replace('</p>', '</p><br>')
 
-  <!-- Jump nav -->
-  {jump_nav}
-
-  <!-- Content -->
-  {raw_html}
-
-</div>""".strip()
-
-    return title, html
+    return title, raw_html
 
 
 def wp_auth_token() -> tuple[str, str, str]:
@@ -829,7 +764,21 @@ def main():
     parser.add_argument("--fresh",     action="store_true", help="Ignore cache and re-fetch all feeds")
     parser.add_argument("--no-enrich", action="store_true", help="Skip full-text article scraping")
     parser.add_argument("--no-hn",     action="store_true", help="Skip Hacker News signals")
+    parser.add_argument("--repost",    action="store_true", help="Skip generation; re-post saved markdown file to WordPress")
     args = parser.parse_args()
+
+    # --repost: skip everything, just convert saved markdown and publish
+    if args.repost:
+        filename = output_filename()
+        if not Path(filename).exists():
+            raise SystemExit(f"No saved file found: {filename}  (run without --repost first)")
+        print(f"Re-posting from {filename}...")
+        briefing = Path(filename).read_text(encoding="utf-8")
+        title, html = markdown_to_html(briefing)
+        print("Posting to WordPress...")
+        post_url = post_to_wordpress(title, html)
+        print(f"Done ✅  Published: {post_url}")
+        return
 
     # 1. Fetch items (from cache or live)
     items = None
