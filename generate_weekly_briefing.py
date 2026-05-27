@@ -417,7 +417,7 @@ def build_prompt(selected: list[dict]) -> str:
     rest = [it for it in selected if it["id"] not in top_ids]
 
     lines = [
-        f"You are writing the weekly AI briefing for aitechhelper.com — week of {date_range}.",
+        f"You are writing the weekly AI briefing for The AI Hub — week of {date_range}.",
         "",
         "AUDIENCE: Curious, intelligent readers who follow AI but are NOT developers or researchers.",
         "They know ChatGPT exists. They may not know what a 'system card', 'TPU', or 'inference endpoint' is.",
@@ -447,7 +447,7 @@ def build_prompt(selected: list[dict]) -> str:
         "",
         "---",
         "",
-        f"# AI Tech Helper Weekly: [Punchy subtitle naming the single biggest story of the week in plain English. No jargon. Max 10 words. Example: 'OpenAI Drops GPT-5.5, Redefines Agents and Automation']",
+        f"# The AI Hub Weekly: [Punchy subtitle naming the single biggest story of the week in plain English. No jargon. Max 10 words. Example: 'OpenAI Drops GPT-5.5, Redefines Agents and Automation']",
         "",
         "[INTRO — 2 to 3 sentences. Set the scene for the week. What was the dominant theme or tension? ",
         "Make it feel like an opening to a good article, not a table of contents.]",
