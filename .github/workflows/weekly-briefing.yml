@@ -30,5 +30,11 @@ jobs:
           WP_USERNAME:       ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD:   ${{ secrets.WP_APP_PASSWORD }}
           PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
-          # Optional: set BRIEFING_MODEL secret to use Claude instead of gpt-4.1
-        run: python3 generate_weekly_briefing.py --post --fresh
+        run: python3 generate_ai_hub_briefing.py --post --fresh
+
+      - name: Generate Instagram posts
+        env:
+          OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }}
+          GMAIL_ADDRESS:       ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD:  ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python3 generate_instagram_posts.py --post

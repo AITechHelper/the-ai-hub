@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-AI Tools & Capabilities Weekly Briefing Generator
+The AI Hub Briefing Generator
 
 Usage:
-  python3 generate_weekly_briefing.py              # full run
-  python3 generate_weekly_briefing.py --post       # generate + post to WordPress
-  python3 generate_weekly_briefing.py --fresh      # ignore cache, re-fetch all feeds
-  python3 generate_weekly_briefing.py --no-enrich  # skip full-text article scraping
-  python3 generate_weekly_briefing.py --no-hn      # skip Hacker News signals
+  python3 generate_ai_hub_briefing.py              # full run
+  python3 generate_ai_hub_briefing.py --post       # generate + post to WordPress
+  python3 generate_ai_hub_briefing.py --fresh      # ignore cache, re-fetch all feeds
+  python3 generate_ai_hub_briefing.py --no-enrich  # skip full-text article scraping
+  python3 generate_ai_hub_briefing.py --no-hn      # skip Hacker News signals
 
 Model:
   Defaults to gpt-4.1. Set BRIEFING_MODEL=claude-opus-4-6 in .env to use Claude.
@@ -57,32 +57,47 @@ CACHE_MAX_AGE_HOURS = 2
 MODEL = os.getenv("BRIEFING_MODEL") or "gpt-4.1"
 
 RSS_FEEDS = [
-    # Company / lab blogs (highest signal)
+    # Company / lab blogs (highest signal — 100% AI content)
     "https://openai.com/news/rss.xml",
+    "https://www.anthropic.com/rss.xml",
     "https://blog.google/technology/ai/rss/",    # covers Google AI + DeepMind
     "https://huggingface.co/blog/feed.xml",
     "https://engineering.fb.com/feed/",           # Meta / FAIR engineering
+    "https://mistral.ai/feed.xml",
+    "https://www.deeplearning.ai/feed/",
 
-    # AI-focused coverage
-    "https://venturebeat.com/feed/",
+    # AI-only news and analysis
+    "https://venturebeat.com/category/ai/feed/",  # AI section only (was full feed)
     "https://www.artificialintelligence-news.com/feed/",
-    "https://www.wired.com/feed/tag/ai/latest/rss",
+    "https://www.thealgorithmicbridge.com/feed",  # AI newsletter / analysis
+    "https://aisnakeoil.substack.com/feed",       # AI research / critique
+    "https://www.interconnects.ai/feed",          # AI research explainers
+    "https://www.import-ai.net/feed",             # Jack Clark's Import AI
+    "https://simonwillison.net/atom/everything/", # AI tools / LLM practitioner
 
-    # Reputable tech coverage
+    # Reputable tech with strong AI-specific feeds
     "https://arstechnica.com/tag/artificial-intelligence/feed/",
     "https://www.technologyreview.com/topic/artificial-intelligence/feed",
-    "https://www.theverge.com/rss/index.xml",
-    "https://www.zdnet.com/topic/artificial-intelligence/rss.xml",
-    "https://api.axios.com/feed/",
-    "https://www.fastcompany.com/section/tech/rss",
+    "https://www.wired.com/feed/tag/ai/latest/rss",
+    "https://www.theverge.com/ai-artificial-intelligence/rss/index.xml",
 ]
 
 SOURCE_WEIGHTS = {
+    # First-party lab/company blogs
     "openai.com": 5,
     "anthropic.com": 5,
     "blog.google": 4,
     "huggingface.co": 4,
     "engineering.fb.com": 3,
+    "mistral.ai": 3,
+    "deeplearning.ai": 3,
+    # AI-only publications
+    "artificialintelligence-news.com": 3,
+    "thealgorithmicbridge.com": 3,
+    "interconnects.ai": 3,
+    "simonwillison.net": 3,
+    "import-ai.net": 3,
+    # Reputable tech with AI focus
     "venturebeat.com": 3,
     "technologyreview.com": 3,
     "arstechnica.com": 3,
@@ -242,10 +257,17 @@ def fetch_rss_items() -> list[dict]:
             if dt is None or dt < cutoff:
                 continue
             summary = clean_text(getattr(e, "summary", "") or getattr(e, "description", "") or "")
+            title_lower = title.lower()
             text_blob = f"{title} {summary}".lower()
-            strong_hits = sum(1 for k in STRONG_KEYWORDS if k in text_blob)
-            weak_hits = sum(1 for k in WEAK_KEYWORDS if k in text_blob)
-            if not (strong_hits >= 1 or weak_hits >= 2):
+            title_strong = sum(1 for k in STRONG_KEYWORDS if k in title_lower)
+            title_weak = sum(1 for k in WEAK_KEYWORDS if k in title_lower)
+            body_strong = sum(1 for k in STRONG_KEYWORDS if k in text_blob)
+            body_weak = sum(1 for k in WEAK_KEYWORDS if k in text_blob)
+            # Title must have at least one AI keyword hit; body-only matches are too noisy
+            title_match = title_strong >= 1 or title_weak >= 2
+            # Allow body-only if the signal is very strong (2+ strong keywords)
+            body_strong_match = body_strong >= 2
+            if not (title_match or body_strong_match):
                 continue
             items.append({
                 "id": stable_id(title, url),
@@ -426,6 +448,11 @@ def build_prompt(selected: list[dict]) -> str:
         "You can have opinions. You can challenge the reader. You can react to what's happening.",
         "Do NOT be promotional. Do NOT use marketing language. Be honest and specific.",
         "",
+        "CONTENT FILTER — non-negotiable:",
+        "- ONLY include stories that are directly and primarily about AI, machine learning, or AI-powered products.",
+        "- If a story is fundamentally about politics, sports, crime, finance, or any non-AI topic — even if 'AI' appears",
+        "  somewhere in the article — DO NOT include it. Omit it entirely.",
+        "",
         "STORY PRIORITY — this is critical:",
         "- PRIORITIZE stories about new AI tools, apps, features, or models that readers can actually try or use.",
         "- PRIORITIZE stories about product launches, major updates, pricing changes, or availability milestones.",
@@ -534,7 +561,7 @@ def generate_briefing(prompt: str) -> str:
 
 def output_filename() -> str:
     monday = datetime.now() - timedelta(days=datetime.now().weekday())
-    return f"ai_weekly_briefing_{monday.strftime('%Y-%m-%d')}.md"
+    return f"ai_hub_briefing_{monday.strftime('%Y-%m-%d')}.md"
 
 # =========================
 # WORDPRESS
@@ -759,7 +786,7 @@ def post_to_wordpress(title: str, html: str) -> str:
 # =========================
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate AI weekly briefing")
+    parser = argparse.ArgumentParser(description="Generate The AI Hub briefing")
     parser.add_argument("--post",      action="store_true", help="Post to WordPress after generating")
     parser.add_argument("--fresh",     action="store_true", help="Ignore cache and re-fetch all feeds")
     parser.add_argument("--no-enrich", action="store_true", help="Skip full-text article scraping")
