@@ -613,6 +613,81 @@ def markdown_to_html(md: str) -> tuple[str, str]:
     return title, raw_html
 
 
+# =========================
+# PUBLISH TO SITE REPO (git-as-CMS)
+# =========================
+# Writes each issue as a JSON file the aitechhelper-site Next app reads
+# directly (content/ai-hub/<slug>.json) plus its image (public/ai-hub/<slug>.jpg).
+# This replaces posting to WordPress: the workflow commits these files to the
+# site repo, that push deploys, and the issue is live. See lib/posts.ts there.
+
+def slugify(text: str) -> str:
+    text = re.sub(r"<[^>]+>", "", text).lower()
+    text = text.replace("’", "").replace("'", "")
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-")[:96] or "issue"
+
+def md_to_site_html(md: str) -> tuple[str, str]:
+    """Markdown briefing -> (title, clean semantic HTML) for the site.
+
+    Same structure as the WordPress path but WITHOUT the <br>/<b> spacing
+    hacks — the site's stylesheet owns spacing, so the markup stays clean.
+    """
+    import markdown as md_lib
+
+    lines = md.strip().splitlines()
+    title = ""
+    body_lines = []
+    for line in lines:
+        if not title and line.startswith("# "):
+            title = line.lstrip("#").strip()
+        else:
+            body_lines.append(line)
+
+    html = md_lib.markdown("\n".join(body_lines), extensions=["extra"])
+    # Open source links in a new tab (the site styles these as citation chips).
+    html = re.sub(r'<a href="([^"]+)">', r'<a href="\1" target="_blank" rel="noopener">', html)
+    return title, html.strip()
+
+def excerpt_from_html(html: str, limit: int = 200) -> str:
+    m = re.search(r"<p>(.*?)</p>", html, flags=re.DOTALL)
+    text = re.sub(r"<[^>]+>", "", m.group(1)).strip() if m else ""
+    if len(text) > limit:
+        text = text[:limit].rsplit(" ", 1)[0] + "…"
+    return text
+
+def write_site_post(
+    title: str,
+    html: str,
+    image_bytes: bytes | None,
+    content_dir: str,
+    public_dir: str,
+) -> str:
+    """Write <slug>.json (+ image) into the site repo. Returns the slug."""
+    slug = slugify(title)
+    Path(content_dir).mkdir(parents=True, exist_ok=True)
+    Path(public_dir).mkdir(parents=True, exist_ok=True)
+
+    image_path = None
+    if image_bytes:
+        img_file = Path(public_dir) / f"{slug}.jpg"
+        img_file.write_bytes(image_bytes)
+        image_path = f"/ai-hub/{slug}.jpg"
+
+    record = {
+        "slug": slug,
+        "title": title,
+        "date": datetime.now().replace(microsecond=0).isoformat(),
+        "excerpt": excerpt_from_html(html),
+        "image": image_path,
+        "imageAlt": "",
+        "contentHtml": html,
+    }
+    out = Path(content_dir) / f"{slug}.json"
+    out.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    return slug
+
+
 def wp_auth_token() -> tuple[str, str, str]:
     """Return (site_url, username, base64_token). Raises SystemExit if missing."""
     site_url = os.getenv("WP_SITE_URL", "").rstrip("/")
@@ -788,6 +863,9 @@ def post_to_wordpress(title: str, html: str) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Generate The AI Hub briefing")
     parser.add_argument("--post",      action="store_true", help="Post to WordPress after generating")
+    parser.add_argument("--repo",      action="store_true", help="Write the issue into the site repo (content/ai-hub + public/ai-hub)")
+    parser.add_argument("--content-dir", default=os.getenv("SITE_CONTENT_DIR", "site/content/ai-hub"), help="Where to write the issue JSON")
+    parser.add_argument("--public-dir",  default=os.getenv("SITE_PUBLIC_DIR", "site/public/ai-hub"), help="Where to write the issue image")
     parser.add_argument("--fresh",     action="store_true", help="Ignore cache and re-fetch all feeds")
     parser.add_argument("--no-enrich", action="store_true", help="Skip full-text article scraping")
     parser.add_argument("--no-hn",     action="store_true", help="Skip Hacker News signals")
@@ -850,14 +928,24 @@ def main():
     Path(filename).write_text(briefing + "\n", encoding="utf-8")
     print(f"Saved: {filename}")
 
-    # 8. Post to WordPress (if requested)
+    # 8. Publish. --repo writes the issue into the site repo (the path that
+    #    replaces WordPress); --post still publishes to WordPress during the
+    #    transition. Either or both may be set.
+    if args.repo:
+        print("Writing issue into the site repo...")
+        title, html = md_to_site_html(briefing)
+        image = fetch_featured_image()
+        slug = write_site_post(title, html, image, args.content_dir, args.public_dir)
+        print(f"Wrote site post ✅  {args.content_dir}/{slug}.json")
+
     if args.post:
         print("Posting to WordPress...")
         title, html = markdown_to_html(briefing)
         post_url = post_to_wordpress(title, html)
         print(f"Done ✅  Published: {post_url}")
-    else:
-        print("Done ✅  (run with --post to publish to WordPress)")
+
+    if not args.repo and not args.post:
+        print("Done ✅  (run with --repo to publish to the site, --post for WordPress)")
 
 if __name__ == "__main__":
     main()
