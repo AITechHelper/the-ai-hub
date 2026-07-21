@@ -2,9 +2,9 @@ name: Weekly AI Briefing
 
 on:
   schedule:
-    # Every Monday at 8:00 AM UTC (adjust if you want a different timezone)
-    - cron: "0 13 * * 1"   # 13:00 UTC = 8:00 AM US Eastern / 6:00 AM Mountain
-  workflow_dispatch:        # Also lets you trigger it manually from GitHub
+    # Every Monday at 13:00 UTC (8:00 AM US Eastern / 6:00 AM Mountain)
+    - cron: "0 13 * * 1"
+  workflow_dispatch: # Also lets you trigger it manually from GitHub
 
 jobs:
   post-briefing:
@@ -12,8 +12,18 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout repo
+      - name: Checkout generator repo
         uses: actions/checkout@v4
+
+      # The Next.js site that publishes the newsletter. Checked out so the
+      # generator can write the new issue straight into it. SITE_REPO_TOKEN is
+      # a fine-grained PAT with Contents: Read and write on this repo.
+      - name: Checkout site repo
+        uses: actions/checkout@v4
+        with:
+          repository: AITechHelper/ai-tech-helper-website
+          token: ${{ secrets.SITE_REPO_TOKEN }}
+          path: site
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -23,18 +33,33 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run briefing generator
+      # Writes content/ai-hub/<slug>.json and public/ai-hub/<slug>.jpg into the
+      # site checkout. Pushing those (next step) is what deploys the issue.
+      - name: Generate briefing and write into the site
         env:
-          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
-          WP_SITE_URL:       ${{ secrets.WP_SITE_URL }}
-          WP_USERNAME:       ${{ secrets.WP_USERNAME }}
-          WP_APP_PASSWORD:   ${{ secrets.WP_APP_PASSWORD }}
-          PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
-        run: python3 generate_ai_hub_briefing.py --post --fresh
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          SITE_CONTENT_DIR: site/aitechhelper-site/content/ai-hub
+          SITE_PUBLIC_DIR: site/aitechhelper-site/public/ai-hub
+        run: python3 generate_ai_hub_briefing.py --repo --fresh
 
+      - name: Commit and push the new issue to the site
+        working-directory: site
+        run: |
+          git config user.name "AI Hub Bot"
+          git config user.email "aitechnologyhelper@gmail.com"
+          git add aitechhelper-site/content/ai-hub aitechhelper-site/public/ai-hub
+          if git diff --cached --quiet; then
+            echo "No new issue to commit."
+          else
+            git commit -m "AI Hub: weekly issue $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      # Unchanged — generates and emails the Instagram posts.
       - name: Generate Instagram posts
         env:
-          OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }}
-          GMAIL_ADDRESS:       ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD:  ${{ secrets.GMAIL_APP_PASSWORD }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python3 generate_instagram_posts.py --post
