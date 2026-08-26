@@ -3,8 +3,8 @@
 The AI Hub Briefing Generator
 
 Usage:
-  python3 generate_ai_hub_briefing.py              # full run
-  python3 generate_ai_hub_briefing.py --post       # generate + post to WordPress
+  python3 generate_ai_hub_briefing.py              # full run (writes markdown only)
+  python3 generate_ai_hub_briefing.py --repo       # also write the issue into the site repo
   python3 generate_ai_hub_briefing.py --fresh      # ignore cache, re-fetch all feeds
   python3 generate_ai_hub_briefing.py --no-enrich  # skip full-text article scraping
   python3 generate_ai_hub_briefing.py --no-hn      # skip Hacker News signals
@@ -12,12 +12,10 @@ Usage:
 Model:
   Defaults to gpt-4.1. Set BRIEFING_MODEL=claude-opus-4-6 in .env to use Claude.
 
-WordPress setup (one-time):
-  Add to .env:
-    WP_SITE_URL=https://aitechhelper.com
-    WP_USERNAME=your_wp_username
-    WP_APP_PASSWORD=xxxx xxxx xxxx xxxx xxxx xxxx
-  Generate the app password at: WP Admin → Users → Profile → Application Passwords
+Publishing:
+  The weekly issue is published by writing content/ai-hub/<slug>.json (+ image)
+  into the aitechhelper-site repo (--repo). The GitHub Action commits that and
+  the push deploys the issue. See the "PUBLISH TO SITE REPO" section below.
 """
 
 import os
@@ -25,7 +23,6 @@ import re
 import time
 import json
 import hashlib
-import base64
 import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -564,62 +561,12 @@ def output_filename() -> str:
     return f"ai_hub_briefing_{monday.strftime('%Y-%m-%d')}.md"
 
 # =========================
-# WORDPRESS
-# =========================
-
-def markdown_to_html(md: str) -> tuple[str, str]:
-    """Convert markdown briefing to clean HTML. Returns (title, body_html)."""
-    import markdown as md_lib
-    import re as _re
-
-    lines = md.strip().splitlines()
-    title = ""
-    body_lines = []
-    for line in lines:
-        if not title and line.startswith("# "):
-            title = line.lstrip("#").strip()
-        else:
-            body_lines.append(line)
-
-    body_md = "\n".join(body_lines)
-
-    # Convert markdown to HTML — tables, fenced code, footnotes etc.
-    raw_html = md_lib.markdown(body_md, extensions=["extra"])
-
-    # Open all links in a new tab
-    raw_html = _re.sub(
-        r'<a href="([^"]+)">',
-        r'<a href="\1" target="_blank" rel="noopener">',
-        raw_html,
-    )
-
-    # Bold the story headlines (h3) and add breathing room after them
-    raw_html = _re.sub(
-        r'<h3>(.*?)</h3>',
-        r'<h3><b>\1</b></h3>',
-        raw_html,
-        flags=_re.DOTALL,
-    )
-
-    # Space out after each bullet list (end of each story block)
-    raw_html = raw_html.replace('</ul>', '</ul><br>')
-
-    # Space out after section headings
-    raw_html = raw_html.replace('</h2>', '</h2><br>')
-
-    # Space out between article paragraphs
-    raw_html = raw_html.replace('</p>', '</p><br>')
-
-    return title, raw_html
-
-
-# =========================
 # PUBLISH TO SITE REPO (git-as-CMS)
 # =========================
 # Writes each issue as a JSON file the aitechhelper-site Next app reads
 # directly (content/ai-hub/<slug>.json) plus its image (public/ai-hub/<slug>.jpg).
-# This replaces posting to WordPress: the workflow commits these files to the
-# site repo, that push deploys, and the issue is live. See lib/posts.ts there.
+# The workflow commits these files to the site repo, that push deploys, and the
+# issue is live. This is the only publish path. See lib/posts.ts there.
 
 def slugify(text: str) -> str:
     text = re.sub(r"<[^>]+>", "", text).lower()
@@ -630,8 +577,8 @@ def slugify(text: str) -> str:
 def md_to_site_html(md: str) -> tuple[str, str]:
     """Markdown briefing -> (title, clean semantic HTML) for the site.
 
-    Same structure as the WordPress path but WITHOUT the <br>/<b> spacing
-    hacks — the site's stylesheet owns spacing, so the markup stays clean.
+    Clean markup with no inline spacing hacks — the site's stylesheet owns
+    spacing.
     """
     import markdown as md_lib
 
@@ -688,54 +635,6 @@ def write_site_post(
     return slug
 
 
-def wp_auth_token() -> tuple[str, str, str]:
-    """Return (site_url, username, base64_token). Raises SystemExit if missing."""
-    site_url = os.getenv("WP_SITE_URL", "").rstrip("/")
-    username  = os.getenv("WP_USERNAME", "")
-    app_pass  = os.getenv("WP_APP_PASSWORD", "")
-    if not all([site_url, username, app_pass]):
-        raise SystemExit(
-            "WordPress credentials missing. Add to .env:\n"
-            "  WP_SITE_URL=https://aitechhelper.com\n"
-            "  WP_USERNAME=your_username\n"
-            "  WP_APP_PASSWORD=xxxx xxxx xxxx xxxx xxxx xxxx"
-        )
-    token = base64.b64encode(f"{username}:{app_pass}".encode()).decode()
-    return site_url, username, token
-
-
-def get_or_create_category(name: str, site_url: str, token: str) -> int | None:
-    """Find existing WP category by name or create it. Returns category ID."""
-    headers = {"Authorization": f"Basic {token}"}
-    try:
-        # Fetch all categories (not just search) to avoid search API quirks
-        resp = requests.get(
-            f"{site_url}/wp-json/wp/v2/categories",
-            params={"per_page": 100},
-            headers=headers,
-            timeout=10,
-        )
-        resp.raise_for_status()
-        for cat in resp.json():
-            if cat.get("name", "").lower() == name.lower():
-                print(f"  Category '{name}' found (id={cat['id']})")
-                return cat["id"]
-        # Not found — create it
-        resp = requests.post(
-            f"{site_url}/wp-json/wp/v2/categories",
-            headers={**headers, "Content-Type": "application/json"},
-            json={"name": name},
-            timeout=10,
-        )
-        if resp.status_code in (200, 201):
-            new_id = resp.json().get("id")
-            print(f"  Category '{name}' created (id={new_id})")
-            return new_id
-    except Exception as e:
-        print(f"  [warn] Category lookup failed: {e}")
-    return None
-
-
 def fetch_featured_image(query: str = "artificial intelligence technology") -> bytes | None:
     """
     Fetch a landscape photo for the featured image.
@@ -784,106 +683,19 @@ def fetch_featured_image(query: str = "artificial intelligence technology") -> b
     return None
 
 
-def upload_featured_image(image_bytes: bytes, filename: str, site_url: str, token: str) -> int | None:
-    """Upload image bytes to WP media library. Returns media ID or None."""
-    try:
-        resp = requests.post(
-            f"{site_url}/wp-json/wp/v2/media",
-            headers={
-                "Authorization": f"Basic {token}",
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Content-Type": "image/jpeg",
-            },
-            data=image_bytes,
-            timeout=60,
-        )
-        if resp.status_code in (200, 201):
-            return resp.json().get("id")
-        print(f"  [warn] Image upload failed ({resp.status_code}): {resp.text[:300]}", flush=True)
-    except Exception as e:
-        print(f"  [warn] Image upload error: {e}", flush=True)
-    return None
-
-
-def post_to_wordpress(title: str, html: str) -> str:
-    """Post to WordPress with category + featured image. Returns published URL."""
-    site_url, _, token = wp_auth_token()
-
-    # Category
-    print("  Resolving category...")
-    cat_id = get_or_create_category("AI Tools", site_url, token)
-
-    # Featured image from Unsplash
-    print("  Fetching featured image...")
-    image_bytes = fetch_featured_image("artificial intelligence machine learning technology")
-    media_id = None
-    if image_bytes:
-        monday = datetime.now() - timedelta(days=datetime.now().weekday())
-        filename = f"ai-briefing-{monday.strftime('%Y-%m-%d')}.jpg"
-        media_id = upload_featured_image(image_bytes, filename, site_url, token)
-        if media_id:
-            print(f"  Featured image uploaded (id={media_id})")
-        else:
-            print("  [warn] Image upload failed — posting without featured image")
-    else:
-        print("  [warn] Could not fetch Unsplash image — posting without featured image")
-
-    # Build post payload
-    payload: dict = {
-        "title":   title,
-        "content": html,
-        "status":  "publish",
-        "format":  "standard",
-    }
-    if cat_id:
-        payload["categories"] = [cat_id]
-    if media_id:
-        payload["featured_media"] = media_id
-
-    resp = requests.post(
-        f"{site_url}/wp-json/wp/v2/posts",
-        headers={
-            "Authorization": f"Basic {token}",
-            "Content-Type":  "application/json",
-        },
-        json=payload,
-        timeout=30,
-    )
-
-    if resp.status_code not in (200, 201):
-        print(f"  [error] WordPress post failed ({resp.status_code}): {resp.text[:400]}", flush=True)
-        raise SystemExit(1)
-
-    return resp.json().get("link", f"{site_url}/wp-json/wp/v2/posts")
-
 # =========================
 # MAIN
 # =========================
 
 def main():
     parser = argparse.ArgumentParser(description="Generate The AI Hub briefing")
-    parser.add_argument("--post",      action="store_true", help="Post to WordPress after generating")
     parser.add_argument("--repo",      action="store_true", help="Write the issue into the site repo (content/ai-hub + public/ai-hub)")
     parser.add_argument("--content-dir", default=os.getenv("SITE_CONTENT_DIR", "site/content/ai-hub"), help="Where to write the issue JSON")
     parser.add_argument("--public-dir",  default=os.getenv("SITE_PUBLIC_DIR", "site/public/ai-hub"), help="Where to write the issue image")
     parser.add_argument("--fresh",     action="store_true", help="Ignore cache and re-fetch all feeds")
     parser.add_argument("--no-enrich", action="store_true", help="Skip full-text article scraping")
     parser.add_argument("--no-hn",     action="store_true", help="Skip Hacker News signals")
-    parser.add_argument("--repost",    action="store_true", help="Skip generation; re-post saved markdown file to WordPress")
     args = parser.parse_args()
-
-    # --repost: skip everything, just convert saved markdown and publish
-    if args.repost:
-        filename = output_filename()
-        if not Path(filename).exists():
-            raise SystemExit(f"No saved file found: {filename}  (run without --repost first)")
-        print(f"Re-posting from {filename}...")
-        briefing = Path(filename).read_text(encoding="utf-8")
-        title, html = markdown_to_html(briefing)
-        print("Posting to WordPress...")
-        post_url = post_to_wordpress(title, html)
-        print(f"Done ✅  Published: {post_url}")
-        return
 
     # 1. Fetch items (from cache or live)
     items = None
@@ -928,24 +740,17 @@ def main():
     Path(filename).write_text(briefing + "\n", encoding="utf-8")
     print(f"Saved: {filename}")
 
-    # 8. Publish. --repo writes the issue into the site repo (the path that
-    #    replaces WordPress); --post still publishes to WordPress during the
-    #    transition. Either or both may be set.
+    # 8. Publish. --repo writes the issue into the site repo, which the GitHub
+    #    Action then commits and pushes to deploy. Without it, only the local
+    #    markdown file is produced.
     if args.repo:
         print("Writing issue into the site repo...")
         title, html = md_to_site_html(briefing)
         image = fetch_featured_image()
         slug = write_site_post(title, html, image, args.content_dir, args.public_dir)
         print(f"Wrote site post ✅  {args.content_dir}/{slug}.json")
-
-    if args.post:
-        print("Posting to WordPress...")
-        title, html = markdown_to_html(briefing)
-        post_url = post_to_wordpress(title, html)
-        print(f"Done ✅  Published: {post_url}")
-
-    if not args.repo and not args.post:
-        print("Done ✅  (run with --repo to publish to the site, --post for WordPress)")
+    else:
+        print("Done ✅  (run with --repo to publish to the site)")
 
 if __name__ == "__main__":
     main()
