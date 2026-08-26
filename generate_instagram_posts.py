@@ -197,36 +197,10 @@ def send_email(content: str, date_str: str) -> None:
         print(f"  Email failed: {e}")
 
 
-def post_to_wordpress(content: str, date_str: str) -> None:
-    import base64, requests as req
-    site_url  = os.getenv("WP_SITE_URL", "").rstrip("/")
-    username  = os.getenv("WP_USERNAME", "")
-    password  = os.getenv("WP_APP_PASSWORD", "")
-    if not all([site_url, username, password]):
-        print("  WordPress credentials missing — skipping WP draft.")
-        return
-
-    token = base64.b64encode(f"{username}:{password}".encode()).decode()
-    resp = req.post(
-        f"{site_url}/wp-json/wp/v2/posts",
-        headers={"Authorization": f"Basic {token}", "Content-Type": "application/json"},
-        json={
-            "title": f"Instagram Posts — {date_str}",
-            "content": f"<pre>{content}</pre>",
-            "status": "draft",
-        },
-        timeout=30,
-    )
-    if resp.status_code in (200, 201):
-        print(f"  Saved as WordPress draft: {resp.json().get('link', '')}")
-    else:
-        print(f"  WordPress draft failed ({resp.status_code}): {resp.text[:200]}")
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--fresh", action="store_true", help="Re-fetch RSS feeds first")
-    parser.add_argument("--post",  action="store_true", help="Also save as WordPress draft")
+    parser.add_argument("--post",  action="store_true", help="Also email the posts to yourself")
     args = parser.parse_args()
 
     if args.fresh:
