@@ -22,7 +22,8 @@ load_dotenv()
 PROJECT_DIR    = Path(__file__).parent
 CACHE_FILE     = PROJECT_DIR / "rss_cache.json"
 OUTPUT_ROOT    = PROJECT_DIR / "instagram_posts"
-POSTS_PER_RUN  = 14
+NEWS_POSTS = 7
+TIP_POSTS  = 7
 TEXT_MODEL     = os.getenv("INSTAGRAM_MODEL") or "gpt-4.1"
 NEWSLETTER_URL = "aitechhelper.com/ai-news"
 
@@ -47,39 +48,54 @@ def load_cached_items() -> list[dict]:
 
 PROMPT = """You are writing content for The AI Hub Daily Instagram account.
 
-AUDIENCE: Everyday people curious about AI — not developers. Think small business owners, creators, professionals, curious consumers.
+AUDIENCE: Everyday people curious about AI — small business owners, creators, professionals, curious consumers. Not developers.
 
-TASK: From the news items below, select the {n} stories BEST suited for Instagram. Prioritize:
-- New AI tools or features everyday people can actually use
-- Big product launches (ChatGPT updates, new models, major apps)
-- Surprising or counterintuitive AI stories
-- Stories with broad human interest
-- Avoid: purely technical research, niche developer tools, corporate/legal/funding stories unless major
+TASK: From the news items below, generate two sets of Instagram posts as a single JSON array of exactly {total} objects.
 
-For each story output a JSON array with exactly {n} objects. Each object must have:
+--- SET 1: {news} NEWS POSTS ---
+Select the {news} most engaging stories. For each, set "type": "news" and:
 
-"headline": 6-12 words, ALL CAPS, emotionally engaging, curiosity-driven. NOT a news article title.
+"headline": 6-12 words, ALL CAPS, emotionally engaging, curiosity-driven.
   BAD: "NVIDIA RELEASES COSMOS 3 FOR PHYSICAL AI"
   GOOD: "ROBOTS JUST GOT A BRAIN"
-  BAD: "OPENAI EXPANDS CODEX USAGE"
-  GOOD: "5 MILLION PEOPLE NOW USE CODEX"
 
-"image_direction": One sentence. Just say who or what to feature in the image. No style instructions.
-  Example: "Sam Altman, ChatGPT interface"
-  Example: "Jensen Huang, robot"
-  Example: "Small business owner at laptop"
+"image_direction": One sentence. Who or what to feature. No style instructions.
 
-"caption": Full Instagram caption:
-  - Hook sentence (1 line, punchy)
+"caption":
+  - Punchy hook sentence
   - Blank line
-  - 3-4 short paragraphs in plain conversational English
+  - 3-4 short conversational paragraphs
   - Blank line
   - Engagement question
   - Blank line
+  - "Follow for more AI news and tips."
   - "Subscribe to our free AI newsletter for daily AI news and insights:"
   - "{newsletter}"
   - Blank line
-  - 5 hashtags (mix of broad and story-specific)
+  - 5 hashtags
+
+--- SET 2: {tips} TIP POSTS ---
+Take {tips} of the same stories and reframe them as practical AI tips for business owners, professionals, or everyday users. For each, set "type": "tip" and:
+
+"headline": 6-12 words, ALL CAPS, tip-focused and actionable.
+  Example: "DITCH CHATGPT AND RUN YOUR OWN PRIVATE AI"
+  Example: "USE AI TO RESPOND TO CUSTOMER EMAILS IN SECONDS"
+
+"image_direction": One sentence. Who or what to feature. No style instructions.
+
+"caption":
+  - Start with "AI Tip #[1-{tips}]:" followed by a one-line summary of the tip
+  - Blank line
+  - 3-4 short paragraphs explaining HOW to use or apply this tip in plain English
+  - Make it actionable — tell the reader exactly what to do or try
+  - Blank line
+  - Engagement question
+  - Blank line
+  - "Follow for more AI news and tips."
+  - "Subscribe to our free AI newsletter for daily AI news and insights:"
+  - "{newsletter}"
+  - Blank line
+  - 5 hashtags
 
 Return ONLY a valid JSON array. No markdown, no code fences.
 
@@ -97,9 +113,10 @@ def generate_posts(items: list[dict]) -> list[dict]:
     from openai import OpenAI
     client = OpenAI()
 
-    prompt = PROMPT.format(n=POSTS_PER_RUN, newsletter=NEWSLETTER_URL, items=build_items_text(items))
+    total = NEWS_POSTS + TIP_POSTS
+    prompt = PROMPT.format(total=total, news=NEWS_POSTS, tips=TIP_POSTS, newsletter=NEWSLETTER_URL, items=build_items_text(items))
 
-    print(f"Generating {POSTS_PER_RUN} posts with {TEXT_MODEL}...")
+    print(f"Generating {NEWS_POSTS} news posts + {TIP_POSTS} tip posts with {TEXT_MODEL}...")
     resp = client.chat.completions.create(
         model=TEXT_MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -126,21 +143,26 @@ def save_output(posts: list[dict], out_path: Path) -> None:
         "",
     ]
 
-    for i, post in enumerate(posts, 1):
-        lines += [
-            f"POST {i} OF {len(posts)}",
-            "-" * 40,
-            "",
-            f"HEADLINE: {post['headline']}",
-            "",
-            f"IMAGE DIRECTION: {post['image_direction']}",
-            "",
-            "CAPTION:",
-            post["caption"],
-            "",
-            "=" * 60,
-            "",
-        ]
+    news_posts = [p for p in posts if p.get("type") == "news"]
+    tip_posts  = [p for p in posts if p.get("type") == "tip"]
+
+    for section, section_posts in [("NEWS POSTS", news_posts), ("TIP POSTS", tip_posts)]:
+        lines += [f"── {section} ──", ""]
+        for i, post in enumerate(section_posts, 1):
+            lines += [
+                f"POST {i} OF {len(section_posts)}",
+                "-" * 40,
+                "",
+                f"HEADLINE: {post['headline']}",
+                "",
+                f"IMAGE DIRECTION: {post['image_direction']}",
+                "",
+                "CAPTION:",
+                post["caption"],
+                "",
+                "=" * 60,
+                "",
+            ]
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"\nSaved to: {out_path}")
@@ -163,7 +185,7 @@ def send_email(content: str, date_str: str) -> None:
     msg = MIMEMultipart()
     msg["From"]    = gmail_address
     msg["To"]      = gmail_address
-    msg["Subject"] = f"AI Hub Daily — Instagram Posts {date_str}"
+    msg["Subject"] = f"AI Hub Weekly — Instagram Posts {date_str}"
     msg.attach(MIMEText(content, "plain"))
 
     try:
