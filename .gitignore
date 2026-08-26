@@ -11,6 +11,8 @@ rss_cache.json
 ai_weekly_briefing_*.md
 ai_weekly_briefing.txt
 *.bak-*
+instagram_posts/
+video_scripts/
 
 # Python
 __pycache__/

@@ -56,10 +56,19 @@ jobs:
             git push
           fi
 
-      # Unchanged — generates and emails the Instagram posts.
+      # Generates and emails the Instagram posts.
       - name: Generate Instagram posts
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python3 generate_instagram_posts.py --post
+
+      # Generates and emails 30-45s Reel/Short scripts for both brands
+      # (AI Hub Daily = news → newsletter; AI Tech Helper = teach → implementation help).
+      - name: Generate video scripts
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python3 generate_video_scripts.py --post
