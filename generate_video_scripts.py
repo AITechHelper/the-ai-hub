@@ -46,6 +46,12 @@ WEBSITE_URL    = "aitechhelper.com"
 #   "Private AI setup — run your own ChatGPT that never leaks your data"
 # Leave the list empty to have scripts pitch your services generically.
 WEBSITE_TOOLS = [
+    "AI Voice Agent (Bronze) — answers every call, qualifies the lead, and books the appointment 24/7 so you never miss a job",
+    "Voice + Messaging (Silver) — everything in Bronze plus automatic text replies, appointment reminders, and estimate follow-ups",
+    "Complete Automation (Gold) — full setup: paperwork & payments, new-client onboarding, and custom email workflows",
+    "Multi-Channel Hub — phone, SMS, email, social, and website chat unified in one inbox",
+    "Call Recording & Transcription — every conversation recorded, transcribed, and logged for review",
+    "Monthly Agent Tuning — we keep optimizing your AI agent from real call transcripts every month",
 ]
 
 # =========================
